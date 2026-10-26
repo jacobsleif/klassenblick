@@ -1293,76 +1293,106 @@
       render();
       return;
     }
-    const studentChecks = [...course.students]
-      .sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, "de"))
-      .map((student) => `<label class="attendance-student-row"><input type="checkbox" name="studentIds" value="${escapeHtml(student.id)}" data-attendance-student> <span>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</span></label>`).join("");
     const statuses = course.isSport
       ? [["absent", attendanceLabels.absent], ["sport_excused_inactive", attendanceLabels.sport_excused_inactive], ["sport_unexcused_inactive", attendanceLabels.sport_unexcused_inactive]]
       : [["absent", attendanceLabels.absent], ["absent_excused", attendanceLabels.absent_excused], ["absent_unexcused", attendanceLabels.absent_unexcused]];
+    const sortedStudents = [...course.students].sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, "de"));
+    const rows = sortedStudents.map((student) => {
+      const name = `${student.lastName}, ${student.firstName}`;
+      return `<tr data-att-student="${escapeHtml(student.id)}"><th scope="row" class="att-name">${escapeHtml(name)}</th>${statuses.map(([value, label]) => `<td class="att-cell"><input type="checkbox" data-att-status="${value}" aria-label="${escapeHtml(`${label}: ${name}`)}"></td>`).join("")}</tr>`;
+    }).join("");
+    const head = statuses.map(([value, label]) => `<th scope="col" class="att-head"><span>${escapeHtml(label)}</span><button type="button" class="small-button att-all" data-att-all="${value}">alle</button></th>`).join("");
     const initialSlot = defaultSlotForDate(course, today());
     openModal("Anwesenheit erfassen", `<div class="form-grid">
       <div class="field"><label for="attendance-date">Datum *</label><input id="attendance-date" name="date" type="date" required value="${today()}"></div>
       <div class="field"><label for="attendance-lesson">Stunde</label><input id="attendance-lesson" name="lesson" maxlength="30" list="attendance-lesson-options" placeholder="z. B. 3. Stunde" value="${initialSlot ? escapeHtml(slotLabel(initialSlot)) : ""}"><datalist id="attendance-lesson-options">${slotsForDate(course, today()).map((slot) => `<option value="${escapeHtml(slotLabel(slot))}"></option>`).join("")}</datalist></div>
-      <div class="field full attendance-split">
-        <div class="attendance-student-pane">
-          <label class="toggle-row attendance-select-all"><input type="checkbox" id="attendance-select-all"> <strong>Alle auswählen</strong> <span class="muted" id="attendance-selected-count">0 von ${course.students.length}</span></label>
-          <div class="attendance-student-list">${studentChecks}</div>
-        </div>
-        <div class="attendance-status-pane">
-          <div class="field"><label for="attendance-status">Status für die Auswahl *</label><select id="attendance-status" name="status" required>${statuses.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></div>
-          <div class="field"><label for="attendance-note">Notiz (optional)</label><textarea id="attendance-note" name="note" maxlength="300" placeholder="Kurzer Hinweis, z. B. Entschuldigung liegt vor"></textarea><span class="field-hint">Keine sensiblen Gesundheitsdetails eintragen.</span></div>
-        </div>
+      <div class="field full">
+        <div class="attendance-table-wrap"><table class="attendance-table"><thead><tr><th scope="col" class="att-name-head">Lernende <span class="muted" id="attendance-selected-count"></span></th>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+        <span class="field-hint">Nur Auffälligkeiten ankreuzen, alle anderen gelten als anwesend. Ein Häkchen pro Person; erneutes Anklicken nimmt es zurück.</span>
       </div>
-    </div>`, "Eintrag speichern", (formData) => {
+      <div class="field full"><label for="attendance-note">Notiz für neu markierte Personen (optional)</label><input id="attendance-note" name="note" maxlength="300" placeholder="z. B. Entschuldigung liegt vor"><span class="field-hint">Keine sensiblen Gesundheitsdetails eintragen.</span></div>
+    </div>`, "Liste speichern", (formData) => {
       const date = String(formData.get("date"));
-      const status = String(formData.get("status"));
-      const studentIds = formData.getAll("studentIds").map(String).filter((id) => course.students.some((student) => student.id === id));
-      if (!date || !attendanceLabels[status] || (status.startsWith("sport_") && !course.isSport)) return false;
-      if (!studentIds.length) {
-        showToast("Bitte mindestens eine Person auswählen.");
+      const lesson = String(formData.get("lesson") || "").trim();
+      const note = String(formData.get("note") || "").trim();
+      if (!date) return false;
+      const marks = [...modalFields.querySelectorAll("[data-att-student]")].map((row) => ({
+        studentId: row.dataset.attStudent,
+        status: row.querySelector("[data-att-status]:checked")?.dataset.attStatus || ""
+      }));
+      let entry = course.attendance.find((item) => item.date === date && item.lesson === lesson);
+      const known = new Set(statuses.map(([value]) => value));
+      let saved = 0;
+      let removed = 0;
+      marks.forEach(({ studentId, status }) => {
+        const existing = entry?.records.find((record) => record.studentId === studentId);
+        if (status) {
+          if (!entry) {
+            entry = { id: uid(), date, lesson, records: [] };
+            course.attendance.push(entry);
+          }
+          if (existing) {
+            if (existing.status !== status) {
+              existing.status = status;
+              if (note) existing.note = note;
+              saved += 1;
+            }
+          } else {
+            entry.records.push({ id: uid(), studentId, status, note });
+            saved += 1;
+          }
+        } else if (existing && known.has(existing.status)) {
+          entry.records = entry.records.filter((record) => record.id !== existing.id);
+          removed += 1;
+        }
+      });
+      course.attendance = course.attendance.filter((item) => item.records.length);
+      if (!saved && !removed) {
+        showToast("Keine Änderung: Es wurde nichts markiert.");
         return false;
       }
-      const lesson = String(formData.get("lesson") || "").trim();
-      let entry = course.attendance.find((item) => item.date === date && item.lesson === lesson);
-      if (!entry) {
-        entry = { id: uid(), date, lesson, records: [] };
-        course.attendance.push(entry);
-      }
-      const note = String(formData.get("note") || "").trim();
-      let updated = 0;
-      studentIds.forEach((studentId) => {
-        const existing = entry.records.find((record) => record.studentId === studentId);
-        const record = { id: existing ? existing.id : uid(), studentId, status, note };
-        if (existing) {
-          Object.assign(existing, record);
-          updated += 1;
-        } else entry.records.push(record);
-      });
       activeTab = "attendance";
       saveState();
-      showToast(`${studentIds.length} ${studentIds.length === 1 ? "Eintrag" : "Einträge"} gespeichert${updated ? ` (${updated} aktualisiert)` : ""}.`);
+      showToast(`Liste gespeichert: ${saved} markiert${removed ? `, ${removed} entfernt` : ""}.`);
     });
-    const selectAll = modalFields.querySelector("#attendance-select-all");
-    const studentBoxes = [...modalFields.querySelectorAll("[data-attendance-student]")];
-    const updateSelection = () => {
-      const count = studentBoxes.filter((box) => box.checked).length;
-      selectAll.checked = count === studentBoxes.length;
-      selectAll.indeterminate = count > 0 && count < studentBoxes.length;
-      modalFields.querySelector("#attendance-selected-count").textContent = `${count} von ${studentBoxes.length}`;
+    const rowsEl = [...modalFields.querySelectorAll("[data-att-student]")];
+    const countEl = modalFields.querySelector("#attendance-selected-count");
+    const updateCount = () => {
+      const count = rowsEl.filter((row) => row.querySelector("[data-att-status]:checked")).length;
+      countEl.textContent = count ? `(${count} markiert)` : "";
     };
-    selectAll.addEventListener("change", () => {
-      studentBoxes.forEach((box) => { box.checked = selectAll.checked; });
-      updateSelection();
-    });
-    studentBoxes.forEach((box) => box.addEventListener("change", updateSelection));
+    const setRowStatus = (row, status) => {
+      row.querySelectorAll("[data-att-status]").forEach((box) => { box.checked = box.dataset.attStatus === status; });
+    };
+    modalFields.querySelectorAll("[data-att-status]").forEach((box) => box.addEventListener("change", () => {
+      if (box.checked) setRowStatus(box.closest("tr"), box.dataset.attStatus);
+      updateCount();
+    }));
+    modalFields.querySelectorAll("[data-att-all]").forEach((button) => button.addEventListener("click", () => {
+      const status = button.dataset.attAll;
+      const allSet = rowsEl.every((row) => row.querySelector(`[data-att-status="${status}"]`).checked);
+      rowsEl.forEach((row) => setRowStatus(row, allSet ? "" : status));
+      updateCount();
+    }));
     const dateInput = modalFields.querySelector("#attendance-date");
     const lessonInput = modalFields.querySelector("#attendance-lesson");
+    const loadExisting = () => {
+      const entry = course.attendance.find((item) => item.date === dateInput.value && item.lesson === lessonInput.value.trim());
+      rowsEl.forEach((row) => {
+        const record = entry?.records.find((item) => item.studentId === row.dataset.attStudent);
+        setRowStatus(row, record ? record.status : "");
+      });
+      updateCount();
+    };
     dateInput.addEventListener("change", () => {
       const slots = slotsForDate(course, dateInput.value);
       const slot = defaultSlotForDate(course, dateInput.value);
       modalFields.querySelector("#attendance-lesson-options").innerHTML = slots.map((item) => `<option value="${escapeHtml(slotLabel(item))}"></option>`).join("");
       lessonInput.value = slot ? slotLabel(slot) : "";
+      loadExisting();
     });
+    lessonInput.addEventListener("change", loadExisting);
+    loadExisting();
   }
 
   function deleteStudent(course, studentId) {
@@ -2135,11 +2165,11 @@
   let sidebarCollapsed = false;
   try { sidebarCollapsed = localStorage.getItem("klassenblick-sidebar-collapsed") === "1"; } catch (error) { sidebarCollapsed = false; }
   applySidebarState(sidebarCollapsed);
-  $("#sidebar-toggle").addEventListener("click", () => {
+  ["#sidebar-toggle", "#sidebar-hide"].forEach((selector) => $(selector).addEventListener("click", () => {
     sidebarCollapsed = !sidebarCollapsed;
     applySidebarState(sidebarCollapsed);
     try { localStorage.setItem("klassenblick-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch (error) { /* Anzeige-Einstellung, kein Datenverlust */ }
-  });
+  }));
 
   $("#schedule-button").addEventListener("click", () => {
     showingSchedule = !showingSchedule;
