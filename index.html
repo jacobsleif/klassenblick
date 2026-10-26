@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#132d38">
+    <meta name="description" content="Private, offlinefähige Noten- und Kursverwaltung">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="stylesheet" href="styles.css">
+    <title>Klassenblick – Noten & Kurse</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Klassenblick Startseite">
+          <span class="brand-mark" aria-hidden="true">K</span>
+          <span><strong>Klassenblick</strong><small>Dein digitaler Lehrerkalender</small></span>
+        </a>
+        <div class="top-actions">
+          <span id="save-indicator" class="save-indicator"><span></span> Nur auf diesem Gerät</span>
+          <button class="button button-quiet" id="schedule-button" type="button">Stundenplan</button>
+          <button class="button button-quiet" id="cloud-button" type="button">Mit OneDrive verbinden</button>
+          <button class="button button-quiet" id="cloud-disconnect-button" type="button" hidden>Trennen</button>
+          <button class="button button-quiet" id="import-button" type="button">Daten öffnen</button>
+          <button class="button button-primary" id="export-button" type="button">Sicherung speichern</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden>
+        </div>
+      </header>
+      <div id="storage-warning" class="storage-warning" role="alert" hidden></div>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-heading">
+            <div><p class="eyebrow">MEIN UNTERRICHT</p><h1>Kurse</h1></div>
+            <button class="icon-button" id="add-class-button" type="button" aria-label="Kurs hinzufügen" title="Kurs hinzufügen">+</button>
+          </div>
+          <div id="class-list" class="class-list"></div>
+          <div class="sidebar-footer">
+            <div class="privacy-mark" aria-hidden="true">✓</div>
+            <p><strong>Deine Daten bleiben bei dir.</strong><br>Gespeichert in diesem Browser, Sicherungen bestimmst du selbst.</p>
+          </div>
+        </aside>
+
+        <main id="main-content" class="main-content">
+          <section id="empty-state" class="empty-state">
+            <div class="empty-illustration" aria-hidden="true">
+              <div class="empty-card card-back"></div><div class="empty-card card-front"><span>4+</span><i></i><i></i><i></i></div>
+            </div>
+            <p class="eyebrow">WILLKOMMEN BEI KLASSENBLICK</p>
+            <h2>Dein Unterricht. Ein klarer Überblick.</h2>
+            <p>Lege deinen ersten Kurs an, um Lernende, Leistungen und Anwesenheiten zu verwalten.</p>
+            <button class="button button-primary button-large" id="first-class-button" type="button">Ersten Kurs anlegen <span aria-hidden="true">→</span></button>
+          </section>
+          <section id="course-view" hidden></section>
+          <section id="schedule-view" hidden></section>
+        </main>
+      </div>
+    </div>
+
+    <dialog id="modal" class="modal">
+      <form id="modal-form" method="dialog">
+        <div class="modal-heading">
+          <div><p class="eyebrow" id="modal-eyebrow">KURSE VERWALTEN</p><h2 id="modal-title"></h2></div>
+          <button type="button" class="icon-button modal-close" id="modal-close" aria-label="Schließen">×</button>
+        </div>
+        <div id="modal-fields" class="modal-fields"></div>
+        <div class="modal-actions">
+          <button type="button" class="button button-quiet" id="modal-cancel">Abbrechen</button>
+          <button type="submit" class="button button-primary" id="modal-submit">Speichern</button>
+        </div>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="config.js"></script>
+    <script src="onedrive-sync.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
