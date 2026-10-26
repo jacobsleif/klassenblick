@@ -1,4 +1,4 @@
-const CACHE_NAME = "klassenblick-shell-v19";
+const CACHE_NAME = "klassenblick-shell-v22";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./config.js", "./onedrive-sync.js", "./app.js", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (event) => {

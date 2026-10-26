@@ -120,6 +120,7 @@ tbody tr:hover { background: #fbfdfc; }
 .grade-pill { color: var(--teal-dark); background: var(--teal-pale); }
 .grade-pill.low { color: var(--red); background: var(--red-pale); }
 .status-pill.present { color: var(--teal-dark); background: var(--teal-pale); }
+.status-pill.absent { color: #444; background: #e6e6e6; }
 .status-pill.excused { color: #8a6028; background: var(--amber-pale); }
 .status-pill.unexcused { color: var(--red); background: var(--red-pale); }
 .row-actions { display: flex; gap: 5px; justify-content: flex-end; }
@@ -147,6 +148,19 @@ tbody tr:hover { background: #fbfdfc; }
 .modal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 21px; }
 .modal-heading h2 { margin: 0; font: 800 21px "Manrope", sans-serif; letter-spacing: -.5px; }
 .modal-close { color: var(--muted); font-size: 21px; }
+.modal:has(.attendance-split) { width: min(760px, calc(100vw - 26px)); }
+.attendance-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.attendance-student-pane { display: grid; gap: 8px; min-width: 0; }
+.attendance-select-all { padding: 8px 10px; background: #f7faf9; border: 1px solid var(--line); border-radius: 9px; }
+.attendance-select-all .muted { margin-left: auto; color: var(--muted); }
+.attendance-student-list { display: grid; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; }
+.attendance-student-row { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid #edf2f1; cursor: pointer; }
+.attendance-student-row:last-child { border-bottom: 0; }
+.attendance-student-row:hover { background: #f7faf9; }
+.attendance-student-row input, .attendance-select-all input { accent-color: var(--teal); width: 18px; height: 18px; }
+.attendance-status-pane { display: grid; gap: 14px; min-width: 0; }
+.workspace.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
+.workspace.sidebar-collapsed .sidebar { display: none; }
 .modal-fields { display: grid; gap: 14px; max-height: 58dvh; overflow-y: auto; padding: 1px 2px 4px 1px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 20px; }
 .toggle-row { display: flex; align-items: center; gap: 9px; color: var(--ink); font-size: 11px; }
@@ -328,6 +342,7 @@ tbody tr:hover { background: #fbfdfc; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .full { grid-column: auto; }
   .participant-picker-list { grid-template-columns: 1fr; }
+  .attendance-split { grid-template-columns: 1fr; }
   .schedule-entry-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .schedule-remove-button { justify-self: start; }
   .timetable-week { grid-template-columns: repeat(5, minmax(155px, 1fr)); }

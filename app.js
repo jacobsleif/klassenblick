@@ -846,11 +846,35 @@
 
   const attendanceLabels = {
     present: "Anwesend",
+    absent: "Abwesend",
     absent_excused: "Abwesend · entschuldigt",
     absent_unexcused: "Abwesend · unentschuldigt",
-    sport_excused_inactive: "Entschuldigt inaktiv",
-    sport_unexcused_inactive: "Unentschuldigt inaktiv"
+    sport_excused_inactive: "Abwesend/inaktiv (entschuldigt)",
+    sport_unexcused_inactive: "Inaktiv (unentschuldigt)"
   };
+
+  function slotLabel(slot) {
+    return `${slot.start}–${slot.end}`;
+  }
+
+  function slotsForDate(course, dateValue) {
+    const date = new Date(`${dateValue}T12:00:00`);
+    if (Number.isNaN(date.getTime())) return [];
+    return (course.schedule || []).filter((slot) => slot.day === date.getDay()).sort((a, b) => a.start.localeCompare(b.start));
+  }
+
+  function defaultSlotForDate(course, dateValue) {
+    const slots = slotsForDate(course, dateValue);
+    if (!slots.length) return null;
+    if (dateValue === today()) {
+      const now = new Date();
+      const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      return slots.find((slot) => slot.start <= time && time < slot.end)
+        || slots.find((slot) => slot.start > time)
+        || slots[slots.length - 1];
+    }
+    return slots[0];
+  }
 
   function renderAttendance(course) {
     const records = course.attendance.flatMap((entry) => entry.records.map((record) => ({ ...record, date: entry.date, lesson: entry.lesson })))
@@ -860,6 +884,7 @@
         <button class="small-button" data-action="attendance" type="button">+ Erfassung</button></div>
       <div class="panel-content">
         <div class="attendance-stat-row">
+          <span class="status-pill absent">Abwesend: ${records.filter((item) => item.status === "absent").length}</span>
           <span class="status-pill excused">Entschuldigt: ${records.filter((item) => item.status === "absent_excused" || item.status === "sport_excused_inactive").length}</span>
           <span class="status-pill unexcused">Unentschuldigt: ${records.filter((item) => item.status === "absent_unexcused" || item.status === "sport_unexcused_inactive").length}</span>
           ${course.isSport ? `<span class="badge">Sportstatus getrennt erfasst</span>` : ""}
@@ -867,11 +892,11 @@
       </div>
       ${records.length ? `<div class="table-wrap"><table><thead><tr><th>Datum</th><th>Stunde</th><th>Lernende/r</th><th>Status</th><th>Notiz</th><th></th></tr></thead><tbody>${records.map((record) => {
         const student = course.students.find((item) => item.id === record.studentId);
-        const style = record.status.includes("unexcused") ? "unexcused" : record.status.includes("excused") ? "excused" : "present";
+        const style = record.status === "absent" ? "absent" : record.status.includes("unexcused") ? "unexcused" : record.status.includes("excused") ? "excused" : "present";
         return `<tr><td>${escapeHtml(record.date)}</td><td>${escapeHtml(record.lesson || "–")}</td><td>${student ? studentFullName(student) : '<span class="muted">Gelöscht</span>'}</td><td><span class="status-pill ${style}">${escapeHtml(attendanceLabels[record.status] || record.status)}</span></td><td>${escapeHtml(record.note || "–")}</td><td><button class="small-button danger" data-action="delete-attendance" data-id="${escapeHtml(record.id)}" type="button">Löschen</button></td></tr>`;
       }).join("")}</tbody></table></div>` : '<div class="empty-inline">Noch keine Anwesenheiten oder Fehlzeiten erfasst.</div>'}
     </section>
-    <div class="hint-box" style="margin-top:14px"><strong>So funktioniert es:</strong> Fehlzeiten und Sport-Inaktivität werden als Unterrichtsereignisse mit Datum, Stunde und optionaler Notiz gespeichert. Für Sport stehen „entschuldigt inaktiv“ und „unentschuldigt inaktiv“ zusätzlich zur Verfügung.</div>`;
+    <div class="hint-box" style="margin-top:14px"><strong>So funktioniert es:</strong> Fehlzeiten und Sport-Inaktivität werden als Unterrichtsereignisse mit Datum, Stunde und optionaler Notiz gespeichert. Die Stunde wird aus dem Stundenplan des Kurses vorgeschlagen. In Sportkursen stehen „Abwesend/inaktiv (entschuldigt)“ und „Inaktiv (unentschuldigt)“ zur Verfügung.</div>`;
   }
 
   function bindCourseActions() {
@@ -1268,35 +1293,75 @@
       render();
       return;
     }
-    const options = course.students.map((student) => `<option value="${escapeHtml(student.id)}">${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</option>`).join("");
-    const statuses = [
-      ["absent_excused", "Abwesend · entschuldigt"],
-      ["absent_unexcused", "Abwesend · unentschuldigt"],
-      ...(course.isSport ? [["sport_excused_inactive", "Entschuldigt inaktiv"], ["sport_unexcused_inactive", "Unentschuldigt inaktiv"]] : [])
-    ];
+    const studentChecks = [...course.students]
+      .sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, "de"))
+      .map((student) => `<label class="attendance-student-row"><input type="checkbox" name="studentIds" value="${escapeHtml(student.id)}" data-attendance-student> <span>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</span></label>`).join("");
+    const statuses = course.isSport
+      ? [["absent", attendanceLabels.absent], ["sport_excused_inactive", attendanceLabels.sport_excused_inactive], ["sport_unexcused_inactive", attendanceLabels.sport_unexcused_inactive]]
+      : [["absent", attendanceLabels.absent], ["absent_excused", attendanceLabels.absent_excused], ["absent_unexcused", attendanceLabels.absent_unexcused]];
+    const initialSlot = defaultSlotForDate(course, today());
     openModal("Anwesenheit erfassen", `<div class="form-grid">
       <div class="field"><label for="attendance-date">Datum *</label><input id="attendance-date" name="date" type="date" required value="${today()}"></div>
-      <div class="field"><label for="attendance-lesson">Stunde</label><input id="attendance-lesson" name="lesson" maxlength="30" placeholder="z. B. 3. Stunde"></div>
-      <div class="field full"><label for="attendance-student">Lernende/r *</label><select id="attendance-student" name="studentId" required>${options}</select></div>
-      <div class="field full"><label for="attendance-status">Status *</label><select id="attendance-status" name="status" required>${statuses.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></div>
-      <div class="field full"><label for="attendance-note">Notiz (optional)</label><textarea id="attendance-note" name="note" maxlength="300" placeholder="Kurzer Hinweis, z. B. Entschuldigung liegt vor"></textarea><span class="field-hint">Keine sensiblen Gesundheitsdetails eintragen.</span></div>
+      <div class="field"><label for="attendance-lesson">Stunde</label><input id="attendance-lesson" name="lesson" maxlength="30" list="attendance-lesson-options" placeholder="z. B. 3. Stunde" value="${initialSlot ? escapeHtml(slotLabel(initialSlot)) : ""}"><datalist id="attendance-lesson-options">${slotsForDate(course, today()).map((slot) => `<option value="${escapeHtml(slotLabel(slot))}"></option>`).join("")}</datalist></div>
+      <div class="field full attendance-split">
+        <div class="attendance-student-pane">
+          <label class="toggle-row attendance-select-all"><input type="checkbox" id="attendance-select-all"> <strong>Alle auswählen</strong> <span class="muted" id="attendance-selected-count">0 von ${course.students.length}</span></label>
+          <div class="attendance-student-list">${studentChecks}</div>
+        </div>
+        <div class="attendance-status-pane">
+          <div class="field"><label for="attendance-status">Status für die Auswahl *</label><select id="attendance-status" name="status" required>${statuses.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select></div>
+          <div class="field"><label for="attendance-note">Notiz (optional)</label><textarea id="attendance-note" name="note" maxlength="300" placeholder="Kurzer Hinweis, z. B. Entschuldigung liegt vor"></textarea><span class="field-hint">Keine sensiblen Gesundheitsdetails eintragen.</span></div>
+        </div>
+      </div>
     </div>`, "Eintrag speichern", (formData) => {
       const date = String(formData.get("date"));
       const status = String(formData.get("status"));
+      const studentIds = formData.getAll("studentIds").map(String).filter((id) => course.students.some((student) => student.id === id));
       if (!date || !attendanceLabels[status] || (status.startsWith("sport_") && !course.isSport)) return false;
-      let entry = course.attendance.find((item) => item.date === date && item.lesson === String(formData.get("lesson") || "").trim());
+      if (!studentIds.length) {
+        showToast("Bitte mindestens eine Person auswählen.");
+        return false;
+      }
+      const lesson = String(formData.get("lesson") || "").trim();
+      let entry = course.attendance.find((item) => item.date === date && item.lesson === lesson);
       if (!entry) {
-        entry = { id: uid(), date, lesson: String(formData.get("lesson") || "").trim(), records: [] };
+        entry = { id: uid(), date, lesson, records: [] };
         course.attendance.push(entry);
       }
-      const studentId = String(formData.get("studentId"));
-      const existing = entry.records.find((record) => record.studentId === studentId);
-      const record = { id: existing ? existing.id : uid(), studentId, status, note: String(formData.get("note") || "").trim() };
-      if (existing) Object.assign(existing, record);
-      else entry.records.push(record);
+      const note = String(formData.get("note") || "").trim();
+      let updated = 0;
+      studentIds.forEach((studentId) => {
+        const existing = entry.records.find((record) => record.studentId === studentId);
+        const record = { id: existing ? existing.id : uid(), studentId, status, note };
+        if (existing) {
+          Object.assign(existing, record);
+          updated += 1;
+        } else entry.records.push(record);
+      });
       activeTab = "attendance";
       saveState();
-      showToast(existing ? "Eintrag wurde aktualisiert." : "Anwesenheit wurde gespeichert.");
+      showToast(`${studentIds.length} ${studentIds.length === 1 ? "Eintrag" : "Einträge"} gespeichert${updated ? ` (${updated} aktualisiert)` : ""}.`);
+    });
+    const selectAll = modalFields.querySelector("#attendance-select-all");
+    const studentBoxes = [...modalFields.querySelectorAll("[data-attendance-student]")];
+    const updateSelection = () => {
+      const count = studentBoxes.filter((box) => box.checked).length;
+      selectAll.checked = count === studentBoxes.length;
+      selectAll.indeterminate = count > 0 && count < studentBoxes.length;
+      modalFields.querySelector("#attendance-selected-count").textContent = `${count} von ${studentBoxes.length}`;
+    };
+    selectAll.addEventListener("change", () => {
+      studentBoxes.forEach((box) => { box.checked = selectAll.checked; });
+      updateSelection();
+    });
+    studentBoxes.forEach((box) => box.addEventListener("change", updateSelection));
+    const dateInput = modalFields.querySelector("#attendance-date");
+    const lessonInput = modalFields.querySelector("#attendance-lesson");
+    dateInput.addEventListener("change", () => {
+      const slots = slotsForDate(course, dateInput.value);
+      const slot = defaultSlotForDate(course, dateInput.value);
+      modalFields.querySelector("#attendance-lesson-options").innerHTML = slots.map((item) => `<option value="${escapeHtml(slotLabel(item))}"></option>`).join("");
+      lessonInput.value = slot ? slotLabel(slot) : "";
     });
   }
 
@@ -1709,7 +1774,7 @@
   function updateStorageWarning() {
     const warning = $("#storage-warning");
     if (!warning) return;
-    const message = storageRecoveryError || persistenceWarning || (!oneDrivePermissionGranted ? storagePolicyWarning : "");
+    const message = storageRecoveryError || persistenceWarning || (!oneDrivePermissionGranted && !cloud.isConnected() ? storagePolicyWarning : "");
     warning.hidden = !message;
     warning.textContent = message || "";
     warning.classList.toggle("storage-recovery-error", Boolean(storageRecoveryError));
@@ -2060,6 +2125,22 @@
 
   $("#add-class-button").addEventListener("click", openClassModal);
   $("#first-class-button").addEventListener("click", openClassModal);
+  function applySidebarState(collapsed) {
+    document.querySelector(".workspace").classList.toggle("sidebar-collapsed", collapsed);
+    const toggle = $("#sidebar-toggle");
+    toggle.textContent = collapsed ? "Kursliste einblenden" : "Kursliste ausblenden";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+
+  let sidebarCollapsed = false;
+  try { sidebarCollapsed = localStorage.getItem("klassenblick-sidebar-collapsed") === "1"; } catch (error) { sidebarCollapsed = false; }
+  applySidebarState(sidebarCollapsed);
+  $("#sidebar-toggle").addEventListener("click", () => {
+    sidebarCollapsed = !sidebarCollapsed;
+    applySidebarState(sidebarCollapsed);
+    try { localStorage.setItem("klassenblick-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch (error) { /* Anzeige-Einstellung, kein Datenverlust */ }
+  });
+
   $("#schedule-button").addEventListener("click", () => {
     showingSchedule = !showingSchedule;
     render();
