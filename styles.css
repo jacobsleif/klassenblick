@@ -20,6 +20,7 @@
 body { margin: 0; color: var(--ink); background: var(--canvas); min-width: 320px; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
+:focus-visible { outline: 3px solid #176d65; outline-offset: 3px; }
 .app-shell { min-height: 100dvh; }
 .topbar {
   height: 76px; padding: 0 34px; display: flex; align-items: center; justify-content: space-between;
@@ -226,6 +227,7 @@ tbody tr:hover { background: #fbfdfc; }
 .gradebook-group-heading { min-width: 108px !important; }
 .gradebook-heading-actions { display: flex !important; justify-content: center; gap: 4px; margin-top: 6px; }
 .gradebook-add-button { min-height: 25px; padding: 3px 5px; border: 1px solid #cbd8d5; border-radius: 6px; background: #fff; color: var(--teal-dark); font-size: 9px; font-weight: 700; white-space: nowrap; }
+.gradebook-edit-button { font-size: 12px; min-width: 25px; }
 .gradebook-add-button:hover { border-color: #83b5a7; background: #edf6f2; }
 .gradebook-endnote-heading .gradebook-add-button { margin-top: 6px; border-color: #c5ddd5; color: var(--teal-dark); }
 .gradebook-group-heading.group-semester { background: #e4eaf3; }
@@ -315,9 +317,9 @@ tbody tr:hover { background: #fbfdfc; }
   .brand small { display: none; }
   .brand-mark { width: 35px; height: 35px; border-radius: 11px; }
   .brand strong { font-size: 14px; }
-  .top-actions { width: 100%; justify-content: flex-end; gap: 6px; }
-  .top-actions .button { min-height: 34px; padding: 0 9px; font-size: 10px; }
-  .save-indicator { display: none; }
+  .top-actions { width: 100%; justify-content: flex-start; gap: 6px; flex-wrap: wrap; }
+  .top-actions .button { min-height: 44px; padding: 0 10px; font-size: 11px; }
+  .save-indicator { min-height: 36px; margin-right: 0; font-size: 10px; }
   .workspace { display: flex; flex-direction: column; }
   .sidebar { padding: 13px 13px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .sidebar-heading { padding: 0 3px 10px; }
@@ -331,7 +333,7 @@ tbody tr:hover { background: #fbfdfc; }
   .main-content { padding: 23px 14px 40px; }
   .course-header { flex-direction: column; margin-bottom: 16px; gap: 13px; }
   .course-actions { justify-content: flex-start; width: 100%; }
-  .course-actions .button { min-height: 34px; padding: 0 10px; font-size: 10px; }
+  .course-actions .button { min-height: 44px; padding: 0 10px; font-size: 11px; }
   .tabs { width: 100%; margin-bottom: 15px; }
   .tab { padding: 0 11px; }
   .stats-grid { gap: 8px; }
@@ -361,4 +363,13 @@ tbody tr:hover { background: #fbfdfc; }
   .gradebook-scroll { max-height: 68vh; }
   .gradebook-student-heading, .gradebook-student { min-width: 145px !important; width: 145px; }
   .gradebook-table th, .gradebook-table td { padding: 7px 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .button:hover { transform: none; }
+}
+
+@media (hover: none) {
+  .button:hover { transform: none; }
 }

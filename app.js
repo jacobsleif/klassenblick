@@ -54,6 +54,8 @@
   const modal = $("#modal");
   const modalFields = $("#modal-fields");
   const modalForm = $("#modal-form");
+  let modalOpener = null;
+  let pendingModalOpener = null;
 
   function parseStoredState(raw) {
     const parsed = migrateState(JSON.parse(raw));
@@ -294,9 +296,10 @@
 
   function migrateState(data) {
     if (!data || !Array.isArray(data.classes) || ![1, 2].includes(data.version)) throw new Error("Unbekanntes Datenformat.");
-    data.classes.forEach(migrateCourse);
-    data.version = 2;
-    return data;
+    const migrated = JSON.parse(JSON.stringify(data));
+    migrated.classes.forEach(migrateCourse);
+    migrated.version = 2;
+    return migrated;
   }
 
   function showToast(message) {
@@ -532,6 +535,7 @@
         <span class="tree-marker column-marker">●</span><span class="tree-name">${escapeHtml(node.name)}</span>
         <span class="tree-meta">${escapeHtml(node.date || "Kein Datum")} · ${gradeCount}/${course.students.length} Noten</span>${weightLabel}
         <button class="small-button" data-action="edit-column-grades" data-id="${escapeHtml(node.id)}" type="button">Noten eintragen</button>
+        <button class="small-button" data-action="edit-node" data-id="${escapeHtml(node.id)}" type="button">✎ Bearbeiten</button>
         <button class="small-button danger" data-action="delete-grade-column" data-id="${escapeHtml(node.id)}" type="button">Löschen</button>
       </div>`;
     }
@@ -540,11 +544,12 @@
       ? `<button class="small-button" data-action="add-semester" data-id="${escapeHtml(node.id)}" type="button">+ Halbjahr</button>`
       : `<button class="small-button" data-action="add-subcategory" data-id="${escapeHtml(node.id)}" type="button">+ Kategorie</button>
          <button class="small-button" data-action="add-grade-column" data-id="${escapeHtml(node.id)}" type="button">+ Notenspalte</button>`;
+    const editButton = node.kind === "root" ? "" : `<button class="small-button" data-action="edit-node" data-id="${escapeHtml(node.id)}" type="button">✎ Bearbeiten</button>`;
     return `<section class="grade-tree-node kind-${node.kind}" style="--tree-depth:${depth}">
       <div class="grade-tree-row">
         <span class="tree-marker">${node.kind === "root" ? "◆" : node.kind === "semester" ? "▰" : "▱"}</span>
         <span class="tree-name">${escapeHtml(node.name)}</span><span class="tree-kind">${kindLabel}</span>
-        ${weightLabel}${addButton}
+        ${weightLabel}${editButton}${addButton}
       </div>
       ${children.length ? `<div class="grade-tree-children">${children.map((child) => renderGradeNode(course, child, depth + 1)).join("")}</div>` : node.kind !== "root" ? '<div class="tree-empty">Noch keine Unterkategorien oder Notenspalten.</div>' : ""}
     </section>`;
@@ -671,8 +676,13 @@
     return `<button class="gradebook-add-button" data-action="add-semester" data-id="${escapeHtml(node.id)}" type="button">+ Halbjahr</button>`;
   }
 
+  function gradeBookEditButton(node) {
+    return `<button class="gradebook-add-button gradebook-edit-button" data-action="edit-node" data-id="${escapeHtml(node.id)}" type="button" title="${escapeHtml(node.name)} bearbeiten oder verschieben" aria-label="${escapeHtml(node.name)} bearbeiten oder verschieben">✎</button>`;
+  }
+
   function gradeBookCategoryActions(node) {
     return `<span class="gradebook-heading-actions">
+      ${gradeBookEditButton(node)}
       <button class="gradebook-add-button" data-action="add-subcategory" data-id="${escapeHtml(node.id)}" type="button" title="Unterkategorie zu ${escapeHtml(node.name)} hinzufügen">+ Kategorie</button>
       <button class="gradebook-add-button" data-action="add-grade-column" data-id="${escapeHtml(node.id)}" type="button" title="Notenspalte zu ${escapeHtml(node.name)} hinzufügen">+ Note</button>
     </span>`;
@@ -689,7 +699,7 @@
 
   function appendGradeBookHeader(node, depth, totalRows, rows) {
     if (node.kind === "column") {
-      rows[depth].push(`<th class="gradebook-column-heading" rowspan="${totalRows - depth}"><span>${escapeHtml(node.name)}</span><small>${escapeHtml(node.date || "Notenspalte")} · Gewicht ${escapeHtml(formatWeight(node.weight))}×</small></th>`);
+      rows[depth].push(`<th class="gradebook-column-heading" rowspan="${totalRows - depth}"><span>${escapeHtml(node.name)}</span><small>${escapeHtml(node.date || "Notenspalte")}       · Gewicht ${escapeHtml(formatWeight(node.weight))}×</small><span class="gradebook-heading-actions">${gradeBookEditButton(node)}</span></th>`);
       return;
     }
     if (!node.children?.length) {
@@ -779,6 +789,58 @@
     $("#column-parent").addEventListener("change", (event) => {
       const parent = findNode(course.gradeTree, event.target.value);
       if (parent) $("#column-weight").value = 1;
+    });
+  }
+
+  function openEditNodeModal(course, nodeId) {
+    const node = findNode(course.gradeTree, nodeId);
+    const currentParent = findParent(course.gradeTree, nodeId);
+    if (!node || node.kind === "root" || !currentParent) return;
+    const isColumn = node.kind === "column";
+    const movable = node.kind !== "semester";
+    const ownIds = new Set(gradeBookMetrics(node).map((item) => item.id));
+    const parents = movable ? getColumnParents(course.gradeTree).filter((item) => !ownIds.has(item.node.id)) : [];
+    const parentOptions = parents.map(({ node: parent, path }) => `<option value="${escapeHtml(parent.id)}" ${parent.id === currentParent.id ? "selected" : ""}>${escapeHtml(path)}</option>`).join("");
+    const kindText = isColumn ? "Notenspalte" : node.kind === "semester" ? "Halbjahr" : "Kategorie";
+    openModal(`${kindText} bearbeiten`, `<div class="form-grid">
+      <div class="field full"><label for="node-name">Bezeichnung *</label><input id="node-name" name="name" required maxlength="100" value="${escapeHtml(node.name)}"></div>
+      ${movable ? `<div class="field full"><label for="node-parent">Übergeordnete Ebene (Verschieben) *</label><select id="node-parent" name="parentId" required>${parentOptions}</select></div>` : ""}
+      ${isColumn ? `<div class="field"><label for="node-date">Datum</label><input id="node-date" name="date" type="date" value="${escapeHtml(node.date || "")}"></div>` : ""}
+      <div class="field"><label for="node-weight">Gewicht innerhalb der Ebene</label><input id="node-weight" name="weight" type="number" min="0" step="0.1" value="${escapeHtml(node.weight)}"></div>
+      <div class="field full"><span class="field-hint">${movable ? "Beim Verschieben bleiben alle eingetragenen Noten und Unterebenen erhalten; nur die Berechnung ändert sich." : "Halbjahre liegen immer direkt unter der Endnote."}</span></div>
+    </div>`, "Speichern", (formData) => {
+      const name = String(formData.get("name") || "").trim();
+      const weight = Number(formData.get("weight"));
+      if (!name || !Number.isFinite(weight) || weight < 0) {
+        showToast("Bitte eine Bezeichnung und ein gültiges Gewicht ab 0 angeben.");
+        return false;
+      }
+      let newParent = currentParent;
+      if (movable) {
+        newParent = findNode(course.gradeTree, String(formData.get("parentId")));
+        if (!newParent || newParent.kind === "column" || ownIds.has(newParent.id)) {
+          showToast("Ungültige übergeordnete Ebene.");
+          return false;
+        }
+      }
+      node.name = name;
+      node.weight = weight;
+      if (isColumn) node.date = String(formData.get("date") || "");
+      if (newParent.id !== currentParent.id) {
+        currentParent.children = currentParent.children.filter((child) => child.id !== nodeId);
+        newParent.children.push(node);
+      }
+      if (!isColumn && movable) node.kind = newParent.kind === "semester" ? "area" : "subcategory";
+      getGradeColumns(course).forEach((column) => {
+        const columnParent = findParent(course.gradeTree, column.id);
+        course.grades.filter((grade) => grade.columnId === column.id).forEach((grade) => {
+          grade.title = column.name;
+          grade.category = columnParent ? columnParent.name : grade.category;
+          if (column.date) grade.date = column.date;
+        });
+      });
+      saveState();
+      showToast("Änderung wurde gespeichert.");
     });
   }
 
@@ -904,7 +966,14 @@
       activeTab = button.dataset.tab;
       render();
     }));
-    courseView.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => handleAction(button.dataset.action, button.dataset.id)));
+    courseView.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => {
+      pendingModalOpener = button;
+      try {
+        handleAction(button.dataset.action, button.dataset.id);
+      } finally {
+        pendingModalOpener = null;
+      }
+    }));
     const search = $("#student-search");
     if (search) search.addEventListener("input", () => {
       studentFilter = search.value;
@@ -948,6 +1017,7 @@
     if (action === "add-subcategory") return openSubcategoryModal(course, id);
     if (action === "add-grade-column") return openGradeColumnModal(course, id);
     if (action === "edit-column-grades") return openColumnGradesModal(course, id);
+    if (action === "edit-node") return openEditNodeModal(course, id);
     if (action === "attendance") return openAttendanceModal(course);
     if (action === "import-csv") return importStudentsCsv(course);
     if (action === "delete-student") return deleteStudent(course, id);
@@ -957,6 +1027,15 @@
   }
 
   function openModal(title, fields, submitLabel, onSubmit) {
+    if (!modal.open) {
+      const element = pendingModalOpener || document.activeElement;
+      modalOpener = {
+        element,
+        id: element?.id || "",
+        action: element?.dataset?.action || "",
+        dataId: element?.dataset?.id || ""
+      };
+    }
     $("#modal-title").textContent = title;
     modalFields.innerHTML = fields;
     $("#modal-submit").textContent = submitLabel || "Speichern";
@@ -972,11 +1051,30 @@
         }
       } else if (result !== false) {
         modal.close();
+        restoreModalFocus();
       }
     };
     modal.showModal();
     const first = modalFields.querySelector("input:not([type=checkbox]), select, textarea");
-    if (first) setTimeout(() => first.focus(), 0);
+    if (first) setTimeout(() => { if (modal.open) first.focus(); }, 0);
+  }
+
+  function restoreModalFocus() {
+    const opener = modalOpener;
+    if (!opener) return;
+    modalOpener = null;
+    const target = opener?.element?.isConnected
+      ? opener.element
+      : opener?.id
+        ? document.getElementById(opener.id)
+        : opener?.action
+          ? [...document.querySelectorAll("[data-action]")].find((item) =>
+            item.dataset.action === opener.action && (item.dataset.id || "") === opener.dataId)
+          : null;
+    window.setTimeout(() => {
+      if (target?.isConnected && !target.disabled) target.focus();
+      else $("#main-content").focus();
+    }, 0);
   }
 
   function openClassModal() {
@@ -1550,7 +1648,7 @@
 
   function importData(file) {
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const data = JSON.parse(String(reader.result));
         if (isGradeSupplement(data)) {
@@ -1559,22 +1657,20 @@
         }
         const imported = migrateState(data);
         validateImport(imported);
-        if (!confirm("Die aktuellen App-Daten vollständig durch die Inhalte der Sicherungsdatei ersetzen? Exportiere zuerst eine Sicherung, wenn du den jetzigen Stand behalten möchtest.")) return;
-        const previousState = state;
-        const previousRecoveryError = storageRecoveryError;
-        state = imported;
-        if (!state.classes.some((course) => course.id === state.selectedClassId)) state.selectedClassId = state.classes[0]?.id || null;
+        const learnerCount = imported.classes.reduce((sum, course) => sum + course.students.length, 0);
+        const gradeCount = imported.classes.reduce((sum, course) => sum + course.grades.length, 0);
+        const attendanceCount = imported.classes.reduce((sum, course) =>
+          sum + course.attendance.reduce((records, entry) => records + entry.records.length, 0), 0);
+        if (!confirm(
+          `Datei: ${file.name}\n${imported.classes.length} Kurse · ${learnerCount} Lernende · ${gradeCount} Noten · ${attendanceCount} Anwesenheitseinträge\n\n` +
+          "Die aktuellen App-Daten vollständig ersetzen? Der bisherige lokale Stand wird vor dem Wechsel automatisch gesichert."
+        )) return;
+        if (!imported.classes.some((course) => course.id === imported.selectedClassId)) imported.selectedClassId = imported.classes[0]?.id || null;
+        imported.updatedAt = new Date().toISOString();
         activeTab = "grades";
         studentFilter = "";
-        storageRecoveryError = null;
-        try {
-          saveState();
-        } catch (saveError) {
-          state = previousState;
-          storageRecoveryError = previousRecoveryError;
-          updateStorageWarning();
-          throw saveError;
-        }
+        await replaceLocalState(imported);
+        saveState();
         updateStorageWarning();
         showToast("Sicherungsdatei wurde geöffnet.");
       } catch (error) {
@@ -1702,24 +1798,74 @@
       }
       if (ids.has(course.id)) throw new Error("Die Sicherungsdatei enthält doppelte Kurskennungen.");
       ids.add(course.id);
-      if (course.students.some((student) => !student || typeof student.id !== "string" ||
-          typeof student.firstName !== "string" || typeof student.lastName !== "string")) {
+      const courseIds = new Set();
+      const addUniqueId = (id, description) => {
+        if (typeof id !== "string" || !id || courseIds.has(id)) {
+          throw new Error(`Die Sicherungsdatei enthält eine fehlende oder doppelte Kennung (${description}).`);
+        }
+        courseIds.add(id);
+      };
+      const studentIds = new Set();
+      for (const student of course.students) {
+        if (!student || typeof student.firstName !== "string" || typeof student.lastName !== "string" ||
+            student.firstName.length > 120 || student.lastName.length > 120 ||
+            (student.group !== undefined && (typeof student.group !== "string" || student.group.length > 120))) {
+          throw new Error("Die Sicherungsdatei enthält ungültige Lernendendaten.");
+        }
+        addUniqueId(student.id, "Lernende");
+        studentIds.add(student.id);
+      }
+      if (course.students.some((student) => !student.firstName.trim() || !student.lastName.trim())) {
         throw new Error("Die Sicherungsdatei enthält ungültige Lernendendaten.");
       }
-      if (course.grades.some((grade) => !grade || typeof grade.id !== "string" ||
-          typeof grade.studentId !== "string" || typeof grade.title !== "string" ||
-          typeof grade.columnId !== "string" || !Number.isFinite(Number(grade.value)) ||
-          !isAllowedGradeValue(course, Number(grade.value), Boolean(grade.legacyValue)) ||
-          !findNode(course.gradeTree, grade.columnId) || findNode(course.gradeTree, grade.columnId).kind !== "column")) {
-        throw new Error("Die Sicherungsdatei enthält ungültige Leistungsdaten.");
+      const gradeColumns = new Map();
+      const gradePairs = new Set();
+      const collectGradeNodes = (node) => {
+        addUniqueId(node.id, "Notenbaum");
+        if (node.kind === "column") gradeColumns.set(node.id, node);
+        (node.children || []).forEach(collectGradeNodes);
+      };
+      collectGradeNodes(course.gradeTree);
+      for (const grade of course.grades) {
+        if (!grade || typeof grade.studentId !== "string" || typeof grade.title !== "string" ||
+            grade.title.length > 120 || typeof grade.columnId !== "string" ||
+            !Number.isFinite(Number(grade.value)) || !isAllowedGradeValue(course, Number(grade.value), Boolean(grade.legacyValue)) ||
+            !studentIds.has(grade.studentId) || !gradeColumns.has(grade.columnId)) {
+          throw new Error("Die Sicherungsdatei enthält ungültige oder nicht zugeordnete Leistungsdaten.");
+        }
+        const pair = `${grade.studentId}|${grade.columnId}`;
+        if (gradePairs.has(pair)) throw new Error("Die Sicherungsdatei enthält mehrere Noten derselben Person in einer Notenspalte.");
+        gradePairs.add(pair);
+        addUniqueId(grade.id, "Leistung");
       }
-      if (course.attendance.some((entry) => !entry || typeof entry.id !== "string" ||
-          typeof entry.date !== "string" || !Array.isArray(entry.records) ||
-          entry.records.some((record) => !record || typeof record.id !== "string" ||
-            typeof record.studentId !== "string" || !attendanceLabels[record.status] ||
-            (record.status.startsWith("sport_") && !course.isSport)))) {
-        throw new Error("Die Sicherungsdatei enthält ungültige Anwesenheitsdaten.");
+      for (const slot of course.schedule) addUniqueId(slot.id, "Stundenplaneintrag");
+      for (const entry of course.attendance) {
+        if (!entry || !isValidDate(entry.date) ||
+            typeof entry.lesson !== "undefined" && (typeof entry.lesson !== "string" || entry.lesson.length > 30) ||
+            !Array.isArray(entry.records)) {
+          throw new Error("Die Sicherungsdatei enthält ungültige Anwesenheitsdaten.");
+        }
+        addUniqueId(entry.id, "Anwesenheit");
+        const attendanceStudents = new Set();
+        for (const record of entry.records) {
+          if (!record || typeof record.studentId !== "string" || !studentIds.has(record.studentId) ||
+              typeof record.note !== "undefined" && (typeof record.note !== "string" || record.note.length > 300) ||
+              !attendanceLabels[record.status] || (record.status.startsWith("sport_") && !course.isSport)) {
+            throw new Error("Die Sicherungsdatei enthält ungültige oder nicht zugeordnete Anwesenheitsdaten.");
+          }
+          if (attendanceStudents.has(record.studentId)) {
+            throw new Error("Die Sicherungsdatei enthält mehrere Anwesenheitsstatus für dieselbe Person und Stunde.");
+          }
+          attendanceStudents.add(record.studentId);
+          addUniqueId(record.id, "Anwesenheitseintrag");
+        }
       }
+    }
+
+    function isValidDate(value) {
+      if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const parsed = new Date(`${value}T00:00:00Z`);
+      return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
     }
 
     function validateGradeNode(node, expectedKind) {
@@ -1754,14 +1900,18 @@
       return await new Promise((resolve, reject) => {
         const tx = db.transaction(BACKUP_STORE, "readonly");
         const store = tx.objectStore(BACKUP_STORE);
-        const keysRequest = store.getAllKeys();
-        const valuesRequest = store.getAll();
-        tx.oncomplete = () => resolve(keysRequest.result.flatMap((key, index) => {
-          const raw = valuesRequest.result[index];
-          if (typeof raw !== "string") return [];
+        const backups = [];
+        const request = store.openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          const key = cursor.key;
+          const raw = cursor.value;
           const priority = key === "latest" ? 3 : key === "previous" ? 2 : String(key).startsWith("history-") ? 1 : 0;
-          return priority ? [{ raw, priority }] : [];
-        }));
+          if (priority && typeof raw === "string") backups.push({ raw, priority });
+          cursor.continue();
+        };
+        tx.oncomplete = () => resolve(backups);
         tx.onerror = () => reject(tx.error);
         tx.onabort = () => reject(tx.error || new Error("Automatische Sicherung konnte nicht gelesen werden."));
       });
@@ -1815,6 +1965,11 @@
 
   function updateSaveIndicator() {
     const indicator = $("#save-indicator");
+    if (!navigator.onLine) {
+      indicator.lastChild.textContent = cloud.isConnected() ? " Offline · lokal gesichert" : " Offline · nur lokal";
+      indicator.title = "Keine Internetverbindung. Änderungen werden im Browser gesichert; der OneDrive-Abgleich wird später erneut versucht.";
+      return;
+    }
     if (cloud.isConnected()) {
       indicator.lastChild.textContent = ` ${cloudStatus}`;
       indicator.title = "Die Daten werden mit der Datei klassenblick-daten.json im OneDrive-App-Ordner abgeglichen.";
@@ -1838,18 +1993,62 @@
     const imported = migrateState(JSON.parse(remote.text));
     validateImport(imported);
     if (!imported.classes.some((course) => course.id === imported.selectedClassId)) imported.selectedClassId = imported.classes[0]?.id || null;
-    imported.updatedAt = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(imported));
-    await persistAutomaticBackup(imported);
-    state = imported;
-    cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt });
+    await replaceLocalState(imported);
+    cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt, syncedHash: stateFingerprint(state) });
     render();
+  }
+
+  async function replaceLocalState(replacement) {
+    const previousState = state;
+    const wasRecoveryLocked = Boolean(storageRecoveryError);
+    let previousRaw = null;
+    try {
+      previousRaw = localStorage.getItem(STORAGE_KEY);
+      if (previousRaw === null) previousRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    } catch (error) {
+      if (!wasRecoveryLocked) throw error;
+      console.error("Der bisherige lokale Stand konnte vor dem bestätigten Ersetzen nicht gelesen werden.", error);
+    }
+
+    if (!wasRecoveryLocked) await persistAutomaticBackup(previousState);
+    replacement.version = 2;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(replacement));
+      await persistAutomaticBackup(replacement);
+    } catch (error) {
+      try {
+        if (previousRaw === null) localStorage.removeItem(STORAGE_KEY);
+        else localStorage.setItem(STORAGE_KEY, previousRaw);
+      } catch (restoreError) {
+        storageRecoveryError = "Der Datenwechsel ist fehlgeschlagen und der lokale Stand konnte nicht sicher wiederhergestellt werden. Bitte die App nicht weiter bearbeiten und eine vorhandene Sicherung öffnen.";
+        console.error("Vorheriger lokaler Stand konnte nach fehlgeschlagenem Ersetzen nicht wiederhergestellt werden.", restoreError);
+        updateStorageWarning();
+      }
+      state = previousState;
+      throw error;
+    }
+    state = replacement;
+    storageRecoveryError = null;
+    updateStorageWarning();
   }
 
   async function pushToCloud(etag) {
     if (!state.classes.length && etag) throw new Error("Ein leerer Datenstand überschreibt keine vorhandenen OneDrive-Daten.");
-    const result = await cloud.upload(JSON.stringify(state, null, 2), etag);
-    cloud.setMeta({ etag: result.etag, syncedUpdatedAt: state.updatedAt });
+    const serialized = JSON.stringify(state, null, 2);
+    const result = await cloud.upload(serialized, etag);
+    cloud.setMeta({ etag: result.etag, syncedUpdatedAt: state.updatedAt, syncedHash: stateFingerprint(state) });
+  }
+
+  function stateFingerprint(value) {
+    const canonicalize = (item) => {
+      if (Array.isArray(item)) return item.map(canonicalize);
+      if (!item || typeof item !== "object") return item;
+      return Object.keys(item).sort().reduce((result, key) => {
+        result[key] = canonicalize(item[key]);
+        return result;
+      }, {});
+    };
+    return JSON.stringify(canonicalize(value));
   }
 
   function formatSyncDate(value) {
@@ -1862,7 +2061,7 @@
     try { remoteUpdatedAt = JSON.parse(remote.text).updatedAt; } catch (error) { /* ungültiger Stand wird beim Laden gemeldet */ }
     const useRemote = confirm(
       `OneDrive und dieses Gerät haben unterschiedliche Datenstände.\n\nOneDrive: ${formatSyncDate(remoteUpdatedAt)}\nDieses Gerät: ${formatSyncDate(state.updatedAt)}\n\n` +
-      "OK: OneDrive-Stand übernehmen (der Stand dieses Geräts wird vorher als Sicherungsdatei heruntergeladen).\n" +
+      "OK: OneDrive-Stand übernehmen (der Stand dieses Geräts wird vorher in der automatischen lokalen Wiederherstellung gesichert).\n" +
       "Abbrechen: weitere Optionen.");
     if (useRemote) {
       exportData();
@@ -1888,17 +2087,27 @@
       updateSaveIndicator();
       const meta = cloud.getMeta();
       const remote = await cloud.download();
-      const localChanged = meta.syncedUpdatedAt !== state.updatedAt;
+      const localHash = stateFingerprint(state);
+      const localChanged = meta.syncedHash ? meta.syncedHash !== localHash : meta.syncedUpdatedAt !== state.updatedAt;
+      let remoteHash = null;
+      if (remote.exists) {
+        const remoteState = migrateState(JSON.parse(remote.text));
+        validateImport(remoteState);
+        if (!remoteState.classes.some((course) => course.id === remoteState.selectedClassId)) {
+          remoteState.selectedClassId = remoteState.classes[0]?.id || null;
+        }
+        remoteHash = stateFingerprint(remoteState);
+      }
       if (!remote.exists) {
         if (state.classes.length) await pushToCloud(null);
       } else if (remote.etag === meta.etag) {
-        if (localChanged) await pushToCloud(remote.etag);
+        if (remoteHash === localHash) {
+          cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt, syncedHash: localHash });
+        } else await pushToCloud(remote.etag);
+      } else if (remoteHash === localHash) {
+        cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt, syncedHash: localHash });
       } else {
-        let remoteUpdatedAt = null;
-        try { remoteUpdatedAt = JSON.parse(remote.text).updatedAt; } catch (error) { /* siehe Validierung beim Übernehmen */ }
-        if (remoteUpdatedAt && remoteUpdatedAt === state.updatedAt) {
-          cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt });
-        } else if (!state.classes.length || (meta.etag && !localChanged)) {
+        if (!state.classes.length || (meta.etag && meta.syncedHash && !localChanged)) {
           await adoptRemoteState(remote);
         } else {
           await resolveCloudConflict(remote);
@@ -2160,6 +2369,8 @@
     const toggle = $("#sidebar-toggle");
     toggle.textContent = collapsed ? "Kursliste einblenden" : "Kursliste ausblenden";
     toggle.setAttribute("aria-expanded", String(!collapsed));
+    $("#sidebar-hide").setAttribute("aria-expanded", String(!collapsed));
+    $("#class-list").setAttribute("aria-hidden", String(collapsed));
   }
 
   let sidebarCollapsed = false;
@@ -2187,8 +2398,9 @@
     if (file) importData(file);
     event.target.value = "";
   });
-  $("#modal-close").addEventListener("click", () => modal.close());
-  $("#modal-cancel").addEventListener("click", () => modal.close());
+  $("#modal-close").addEventListener("click", () => { modal.close(); restoreModalFocus(); });
+  $("#modal-cancel").addEventListener("click", () => { modal.close(); restoreModalFocus(); });
+  modal.addEventListener("close", restoreModalFocus);
 
   initializeApp();
   window.setInterval(() => {
@@ -2206,7 +2418,20 @@
   window.setInterval(() => {
     if (document.visibilityState === "visible" && !modal.open) scheduleCloudSync(0);
   }, 120000);
+  window.addEventListener("offline", updateSaveIndicator);
+  window.addEventListener("online", () => {
+    updateSaveIndicator();
+    scheduleCloudSync(300);
+  });
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
-    window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch((error) => console.error("Offline-Cache konnte nicht aktiviert werden.", error)));
+    window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch((error) => {
+      console.error("Offline-Cache konnte nicht aktiviert werden.", error);
+      if (!persistenceWarning) persistenceWarning = "Der Offline-Cache konnte nicht aktiviert werden. Die App funktioniert möglicherweise nicht ohne Internetverbindung.";
+      updateStorageWarning();
+      showToast("Offline-Cache konnte nicht aktiviert werden.");
+    }));
+  } else if (location.protocol !== "file:") {
+    persistenceWarning = "Dieser Browser unterstützt den Offline-Cache nicht. Die App benötigt möglicherweise eine Internetverbindung.";
+    updateStorageWarning();
   }
 }());
