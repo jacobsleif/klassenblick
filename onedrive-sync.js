@@ -103,7 +103,11 @@
           headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) }
         });
       } catch (error) {
-        if (attempt >= 2) throw error;
+        if (attempt >= 2) {
+          let host = url;
+          try { host = new URL(url).host; } catch (parseError) { /* Adresse unverändert anzeigen */ }
+          throw new Error(`Netzwerkfehler bei ${host} (${options.method || "GET"}, ${url.endsWith(":/content") ? "Inhalt" : "Datei-Info"}): ${error.message}`);
+        }
         await new Promise((resolve) => setTimeout(resolve, Math.min(8000, 500 * (2 ** attempt) + Math.random() * 250)));
         continue;
       }
