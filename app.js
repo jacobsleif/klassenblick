@@ -544,16 +544,14 @@
       ? `<button class="small-button" data-action="add-semester" data-id="${escapeHtml(node.id)}" type="button">+ Halbjahr</button>`
       : `<button class="small-button" data-action="add-subcategory" data-id="${escapeHtml(node.id)}" type="button">+ Kategorie</button>
          <button class="small-button" data-action="add-grade-column" data-id="${escapeHtml(node.id)}" type="button">+ Notenspalte</button>`;
-    const collapsed = isNodeCollapsed(node);
-    const collapseButton = node.kind === "semester" ? collapseToggleButton(node) : "";
     const editButton = node.kind === "root" ? "" : `<button class="small-button" data-action="edit-node" data-id="${escapeHtml(node.id)}" type="button">✎ Bearbeiten</button>`;
     return `<section class="grade-tree-node kind-${node.kind}" style="--tree-depth:${depth}">
       <div class="grade-tree-row">
         <span class="tree-marker">${node.kind === "root" ? "◆" : node.kind === "semester" ? "▰" : "▱"}</span>
         <span class="tree-name">${escapeHtml(node.name)}</span><span class="tree-kind">${kindLabel}</span>
-        ${weightLabel}${editButton}${collapseButton}${addButton}
+        ${weightLabel}${editButton}${addButton}
       </div>
-      ${collapsed ? "" : children.length ? `<div class="grade-tree-children">${children.map((child) => renderGradeNode(course, child, depth + 1)).join("")}</div>` : node.kind !== "root" ? '<div class="tree-empty">Noch keine Unterkategorien oder Notenspalten.</div>' : ""}
+      ${children.length ? `<div class="grade-tree-children">${children.map((child) => renderGradeNode(course, child, depth + 1)).join("")}</div>` : node.kind !== "root" ? '<div class="tree-empty">Noch keine Unterkategorien oder Notenspalten.</div>' : ""}
     </section>`;
   }
 
@@ -627,7 +625,7 @@
 
   function renderGrades(course) {
     const tree = course.gradeTree || defaultGradeTree();
-    const metrics = tree.children.flatMap((child) => visibleGradeBookMetrics(child));
+    const metrics = tree.children.flatMap((child) => gradeBookMetrics(child));
     const maxDepth = Math.max(0, ...tree.children.map((child) => gradeBookHeaderDepth(child)));
     const totalHeaderRows = maxDepth + 1;
     const headerRows = Array.from({ length: totalHeaderRows }, () => []);
@@ -674,39 +672,6 @@
     return [node, ...(node.children || []).flatMap((child) => gradeBookMetrics(child))];
   }
 
-  const COLLAPSED_KEY = "klassenblick-collapsed-semesters";
-
-  function collapsedNodeIds() {
-    try {
-      const stored = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
-      return new Set(Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : []);
-    } catch (error) {
-      return new Set();
-    }
-  }
-
-  function isNodeCollapsed(node) {
-    return node.kind === "semester" && collapsedNodeIds().has(node.id);
-  }
-
-  function toggleNodeCollapsed(nodeId) {
-    const ids = collapsedNodeIds();
-    if (!ids.delete(nodeId)) ids.add(nodeId);
-    try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...ids])); } catch (error) { /* reine Anzeige-Einstellung */ }
-    render();
-  }
-
-  function collapseToggleButton(node) {
-    const collapsed = isNodeCollapsed(node);
-    const label = `${node.name} ${collapsed ? "ausklappen" : "einklappen"}`;
-    return `<button class="gradebook-add-button gradebook-collapse-button" data-action="toggle-node" data-id="${escapeHtml(node.id)}" type="button" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}" aria-expanded="${collapsed ? "false" : "true"}">${collapsed ? "▸ Aufklappen" : "▾ Einklappen"}</button>`;
-  }
-
-  function visibleGradeBookMetrics(node) {
-    if (isNodeCollapsed(node)) return [node];
-    return [node, ...(node.children || []).flatMap((child) => visibleGradeBookMetrics(child))];
-  }
-
   function gradeBookRootActions(node) {
     return `<button class="gradebook-add-button" data-action="add-semester" data-id="${escapeHtml(node.id)}" type="button">+ Halbjahr</button>`;
   }
@@ -718,19 +683,17 @@
   function gradeBookCategoryActions(node) {
     return `<span class="gradebook-heading-actions">
       ${gradeBookEditButton(node)}
-      ${node.kind === "semester" ? collapseToggleButton(node) : ""}
       <button class="gradebook-add-button" data-action="add-subcategory" data-id="${escapeHtml(node.id)}" type="button" title="Unterkategorie zu ${escapeHtml(node.name)} hinzufügen">+ Kategorie</button>
       <button class="gradebook-add-button" data-action="add-grade-column" data-id="${escapeHtml(node.id)}" type="button" title="Notenspalte zu ${escapeHtml(node.name)} hinzufügen">+ Note</button>
     </span>`;
   }
 
   function gradeBookColumnCount(node) {
-    if (isNodeCollapsed(node)) return 1;
     return 1 + (node.children || []).reduce((sum, child) => sum + gradeBookColumnCount(child), 0);
   }
 
   function gradeBookHeaderDepth(node, depth = 0) {
-    if (node.kind === "column" || !node.children?.length || isNodeCollapsed(node)) return depth;
+    if (node.kind === "column" || !node.children?.length) return depth;
     return Math.max(...node.children.map((child) => gradeBookHeaderDepth(child, depth + 1)));
   }
 
@@ -741,10 +704,6 @@
     }
     if (!node.children?.length) {
       rows[depth].push(`<th class="gradebook-column-heading empty-category-heading" rowspan="${totalRows - depth}"><span>Ø ${escapeHtml(node.name)}</span><small>Gewicht ${escapeHtml(formatWeight(node.weight))}× · noch leer</small>${gradeBookCategoryActions(node)}</th>`);
-      return;
-    }
-    if (isNodeCollapsed(node)) {
-      rows[depth].push(`<th class="gradebook-average-heading average-${node.kind} gradebook-collapsed-heading" rowspan="${totalRows - depth}"><span>Ø ${escapeHtml(node.name)}</span><small>Gewicht ${escapeHtml(formatWeight(node.weight))}× · eingeklappt</small><span class="gradebook-heading-actions">${gradeBookEditButton(node)}${collapseToggleButton(node)}</span></th>`);
       return;
     }
     const count = gradeBookColumnCount(node);
@@ -1059,7 +1018,6 @@
     if (action === "add-grade-column") return openGradeColumnModal(course, id);
     if (action === "edit-column-grades") return openColumnGradesModal(course, id);
     if (action === "edit-node") return openEditNodeModal(course, id);
-    if (action === "toggle-node") return toggleNodeCollapsed(id);
     if (action === "attendance") return openAttendanceModal(course);
     if (action === "import-csv") return importStudentsCsv(course);
     if (action === "delete-student") return deleteStudent(course, id);
@@ -1608,7 +1566,7 @@
   }
 
   function backupFileName() {
-    return `Notenraum-Sicherung-${new Date().toISOString().replace(/[:.]/g, "-")}-${uid()}.json`;
+    return `Klassenblick-Sicherung-${new Date().toISOString().replace(/[:.]/g, "-")}-${uid()}.json`;
   }
 
   function exportData() {
@@ -1662,7 +1620,7 @@
           fileHandle = await window.showSaveFilePicker({
             suggestedName: backupFileName(),
             ...(backupDirectoryHandle ? { startIn: backupDirectoryHandle } : {}),
-            types: [{ description: "Notenraum-Sicherung", accept: { "application/json": [".json"] } }]
+            types: [{ description: "Klassenblick-Sicherung", accept: { "application/json": [".json"] } }]
           });
           await writeConnectedFile();
           await saveHandle(fileHandle);
@@ -1717,7 +1675,7 @@
         showToast("Sicherungsdatei wurde geöffnet.");
       } catch (error) {
         console.error("Importdatei konnte nicht geladen werden.", error);
-        showToast(error.message || "Datei ist ungültig oder keine Notenraum-Sicherung.");
+        showToast(error.message || "Datei ist ungültig oder kein Klassenblick-Backup.");
       }
     };
     reader.onerror = () => showToast("Datei konnte nicht gelesen werden.");
@@ -2098,27 +2056,9 @@
     return Number.isNaN(time) ? "unbekannt" : new Date(time).toLocaleString("de-DE");
   }
 
-  function newerSide(remoteValue, localValue) {
-    const remoteTime = Date.parse(remoteValue || "");
-    const localTime = Date.parse(localValue || "");
-    if (Number.isNaN(remoteTime) || Number.isNaN(localTime) || remoteTime === localTime) return "unclear";
-    return remoteTime > localTime ? "remote" : "local";
-  }
-
   async function resolveCloudConflict(remote) {
     let remoteUpdatedAt = "";
     try { remoteUpdatedAt = JSON.parse(remote.text).updatedAt; } catch (error) { /* ungültiger Stand wird beim Laden gemeldet */ }
-    const decision = newerSide(remoteUpdatedAt, state.updatedAt);
-    if (decision === "remote") {
-      await adoptRemoteState(remote);
-      showToast(`OneDrive-Stand war neuer (${formatSyncDate(remoteUpdatedAt)}) und wurde übernommen. Der bisherige Gerätestand ist in der lokalen Wiederherstellung gesichert.`);
-      return;
-    }
-    if (decision === "local") {
-      await pushToCloud(remote.etag);
-      showToast("Der Stand dieses Geräts war neuer und wurde nach OneDrive übertragen. Der alte OneDrive-Stand bleibt im Versionsverlauf erhalten.");
-      return;
-    }
     const useRemote = confirm(
       `OneDrive und dieses Gerät haben unterschiedliche Datenstände.\n\nOneDrive: ${formatSyncDate(remoteUpdatedAt)}\nDieses Gerät: ${formatSyncDate(state.updatedAt)}\n\n` +
       "OK: OneDrive-Stand übernehmen (der Stand dieses Geräts wird vorher in der automatischen lokalen Wiederherstellung gesichert).\n" +
@@ -2282,7 +2222,7 @@
     }
     try {
       const [handle] = await window.showOpenFilePicker({
-        types: [{ description: "Notenraum-Sicherung", accept: { "application/json": [".json"] } }],
+        types: [{ description: "Klassenblick-Sicherung", accept: { "application/json": [".json"] } }],
         multiple: false
       });
       const file = await handle.getFile();
