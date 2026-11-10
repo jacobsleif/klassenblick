@@ -47,6 +47,9 @@
 
   async function login() {
     if (!clientId()) throw new Error("Es ist noch keine Microsoft-Client-ID in config.js eingetragen.");
+    if (!/^https?:$/.test(location.protocol)) {
+      throw new Error("Die App wurde als lokale Datei geöffnet. Bitte öffne sie über https://jacobsleif.github.io/klassenblick/ (nicht per Doppelklick auf index.html), dann klappt die OneDrive-Anmeldung.");
+    }
     if (!crypto.subtle) throw new Error("Die Anmeldung braucht eine sichere Verbindung (HTTPS oder localhost).");
     const verifier = randomString(64);
     const state = randomString(24);
@@ -90,11 +93,40 @@
   }
 
   async function graph(url, options = {}) {
-    const response = await fetch(url, {
-      ...options,
-      headers: { Authorization: `Bearer ${await accessToken()}`, ...(options.headers || {}) }
-    });
-    return response;
+    let token = await accessToken();
+    let refreshed = false;
+    for (let attempt = 0; ; attempt += 1) {
+      let response;
+      try {
+        response = await fetch(url, {
+          ...options,
+          headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) }
+        });
+      } catch (error) {
+        if (attempt >= 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(8000, 500 * (2 ** attempt) + Math.random() * 250)));
+        continue;
+      }
+      if (response.status === 401 && !refreshed) {
+        const current = readJson(TOKEN_KEY);
+        if (!current?.refreshToken) return response;
+        try {
+          await tokenRequest({ grant_type: "refresh_token", refresh_token: current.refreshToken });
+        } catch (error) {
+          if (error.code === "invalid_grant") logout();
+          throw error;
+        }
+        token = readJson(TOKEN_KEY).accessToken;
+        refreshed = true;
+        continue;
+      }
+      if (![429, 500, 502, 503, 504].includes(response.status) || attempt >= 2) return response;
+      const retryAfter = Number(response.headers.get("Retry-After"));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 10000)
+        : Math.min(8000, 500 * (2 ** attempt) + Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
 
   // Liefert { exists:false } oder { exists:true, etag, text }.
