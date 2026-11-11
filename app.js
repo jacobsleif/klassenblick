@@ -2031,16 +2031,16 @@
     updateSaveIndicator();
   }
 
-  async function adoptRemoteState(remote) {
+  async function adoptRemoteState(remote, expectedLocalHash) {
     const imported = migrateState(JSON.parse(remote.text));
     validateImport(imported);
     if (!imported.classes.some((course) => course.id === imported.selectedClassId)) imported.selectedClassId = imported.classes[0]?.id || null;
-    await replaceLocalState(imported);
+    await replaceLocalState(imported, expectedLocalHash);
     cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt, syncedHash: stateFingerprint(state) });
     render();
   }
 
-  async function replaceLocalState(replacement) {
+  async function replaceLocalState(replacement, expectedLocalHash) {
     const previousState = state;
     const wasRecoveryLocked = Boolean(storageRecoveryError);
     let previousRaw = null;
@@ -2053,13 +2053,21 @@
     }
 
     if (!wasRecoveryLocked) await persistAutomaticBackup(previousState);
+    if (expectedLocalHash && stateFingerprint(state) !== expectedLocalHash) {
+      throw new Error("Der lokale Stand wurde während des Abgleichs geändert. Bitte erneut abgleichen.");
+    }
     replacement.version = 2;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(replacement));
       await persistAutomaticBackup(replacement);
+      if (expectedLocalHash && stateFingerprint(state) !== expectedLocalHash) {
+        throw new Error("Der lokale Stand wurde während des Abgleichs geändert. Bitte erneut abgleichen.");
+      }
     } catch (error) {
       try {
-        if (previousRaw === null) localStorage.removeItem(STORAGE_KEY);
+        if (expectedLocalHash && stateFingerprint(previousState) !== expectedLocalHash) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(previousState));
+        } else if (previousRaw === null) localStorage.removeItem(STORAGE_KEY);
         else localStorage.setItem(STORAGE_KEY, previousRaw);
       } catch (restoreError) {
         storageRecoveryError = "Der Datenwechsel ist fehlgeschlagen und der lokale Stand konnte nicht sicher wiederhergestellt werden. Bitte die App nicht weiter bearbeiten und eine vorhandene Sicherung öffnen.";
@@ -2077,8 +2085,10 @@
   async function pushToCloud(etag) {
     if (!state.classes.length && etag) throw new Error("Ein leerer Datenstand überschreibt keine vorhandenen OneDrive-Daten.");
     const serialized = JSON.stringify(state, null, 2);
+    const uploadedState = JSON.parse(serialized);
     const result = await cloud.upload(serialized, etag);
-    cloud.setMeta({ etag: result.etag, syncedUpdatedAt: state.updatedAt, syncedHash: stateFingerprint(state) });
+    cloud.setMeta({ etag: result.etag, syncedUpdatedAt: uploadedState.updatedAt, syncedHash: stateFingerprint(uploadedState) });
+    if (stateFingerprint(state) !== stateFingerprint(uploadedState)) cloudDirty = true;
   }
 
   function stateFingerprint(value) {
@@ -2098,34 +2108,17 @@
     return Number.isNaN(time) ? "unbekannt" : new Date(time).toLocaleString("de-DE");
   }
 
-  function newerSide(remoteValue, localValue) {
-    const remoteTime = Date.parse(remoteValue || "");
-    const localTime = Date.parse(localValue || "");
-    if (Number.isNaN(remoteTime) || Number.isNaN(localTime) || remoteTime === localTime) return "unclear";
-    return remoteTime > localTime ? "remote" : "local";
-  }
-
   async function resolveCloudConflict(remote) {
-    let remoteUpdatedAt = "";
-    try { remoteUpdatedAt = JSON.parse(remote.text).updatedAt; } catch (error) { /* ungültiger Stand wird beim Laden gemeldet */ }
-    const decision = newerSide(remoteUpdatedAt, state.updatedAt);
-    if (decision === "remote") {
-      await adoptRemoteState(remote);
-      showToast(`OneDrive-Stand war neuer (${formatSyncDate(remoteUpdatedAt)}) und wurde übernommen. Der bisherige Gerätestand ist in der lokalen Wiederherstellung gesichert.`);
-      return;
-    }
-    if (decision === "local") {
-      await pushToCloud(remote.etag);
-      showToast("Der Stand dieses Geräts war neuer und wurde nach OneDrive übertragen. Der alte OneDrive-Stand bleibt im Versionsverlauf erhalten.");
-      return;
-    }
+    const remoteUpdatedAt = JSON.parse(remote.text).updatedAt;
+    const localHash = stateFingerprint(state);
     const useRemote = confirm(
       `OneDrive und dieses Gerät haben unterschiedliche Datenstände.\n\nOneDrive: ${formatSyncDate(remoteUpdatedAt)}\nDieses Gerät: ${formatSyncDate(state.updatedAt)}\n\n` +
+      "Die Zeitstempel zeigen nicht, ob Änderungen auf beiden Geräten enthalten sind. Es wird nichts automatisch zusammengeführt.\n\n" +
       "OK: OneDrive-Stand übernehmen (der Stand dieses Geräts wird vorher in der automatischen lokalen Wiederherstellung gesichert).\n" +
       "Abbrechen: weitere Optionen.");
     if (useRemote) {
       exportData();
-      await adoptRemoteState(remote);
+      await adoptRemoteState(remote, localHash);
       return;
     }
     if (confirm("OneDrive-Stand stattdessen mit dem Stand dieses Geräts überschreiben?\n\nDer bisherige OneDrive-Stand bleibt im OneDrive-Versionsverlauf der Datei erhalten.\n\nAbbrechen: nichts ändern und den Abgleich pausieren.")) {
@@ -2136,13 +2129,14 @@
     cloudStatus = "Abgleich pausiert";
   }
 
-  async function syncCloud() {
+  async function syncCloud(manual = false) {
+    manual = manual === true;
     if (!cloud.isConnected() || storageRecoveryError) return;
     if (cloudBusy) { cloudDirty = true; return; }
     cloudBusy = true;
     cloudDirty = false;
     try {
-      if (cloudPaused) { cloudStatus = "Abgleich pausiert"; return; }
+      if (cloudPaused) return;
       cloudStatus = "Abgleich läuft …";
       updateSaveIndicator();
       const meta = cloud.getMeta();
@@ -2151,6 +2145,7 @@
       const localChanged = meta.syncedHash ? meta.syncedHash !== localHash : meta.syncedUpdatedAt !== state.updatedAt;
       let remoteHash = null;
       if (remote.exists) {
+        if (typeof remote.etag !== "string" || !remote.etag) throw new Error("OneDrive hat keine Dateiversion geliefert; der Abgleich wurde zum Schutz der Daten gestoppt.");
         const remoteState = migrateState(JSON.parse(remote.text));
         validateImport(remoteState);
         if (!remoteState.classes.some((course) => course.id === remoteState.selectedClassId)) {
@@ -2159,18 +2154,27 @@
         remoteHash = stateFingerprint(remoteState);
       }
       if (!remote.exists) {
-        if (state.classes.length) await pushToCloud(null);
-      } else if (remote.etag === meta.etag) {
+        if (meta.etag) {
+          cloudPaused = true;
+          cloudStatus = "OneDrive-Datei fehlt – Abgleich pausiert. Bitte Sicherungen prüfen.";
+        } else if (state.classes.length) await pushToCloud(null);
+      } else if (meta.etag && meta.syncedHash && remote.etag === meta.etag) {
         if (remoteHash === localHash) {
           cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt, syncedHash: localHash });
         } else await pushToCloud(remote.etag);
       } else if (remoteHash === localHash) {
         cloud.setMeta({ etag: remote.etag, syncedUpdatedAt: state.updatedAt, syncedHash: localHash });
       } else {
-        if (!state.classes.length || (meta.etag && meta.syncedHash && !localChanged)) {
-          await adoptRemoteState(remote);
+        if ((!state.classes.length && !state.updatedAt && !meta.etag && !meta.syncedHash) ||
+            (meta.etag && meta.syncedHash && !localChanged)) {
+          await adoptRemoteState(remote, localHash);
         } else {
-          await resolveCloudConflict(remote);
+          if (manual) {
+            await resolveCloudConflict(remote);
+          } else {
+            cloudPaused = true;
+            cloudStatus = "Unterschiedliche Datenstände – Abgleich pausiert. Zum Prüfen auf „OneDrive abgleichen“ klicken.";
+          }
         }
       }
       if (!cloudPaused) cloudStatus = `Mit OneDrive abgeglichen (${new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })})`;
@@ -2195,7 +2199,7 @@
   function scheduleCloudSync(delay = 1500) {
     if (!cloud.isConnected()) return;
     clearTimeout(cloudTimer);
-    cloudTimer = setTimeout(syncCloud, delay);
+    cloudTimer = setTimeout(() => syncCloud(), delay);
   }
 
   async function handleCloudButton() {
@@ -2208,7 +2212,7 @@
       return;
     }
     cloudPaused = false;
-    await syncCloud();
+    await syncCloud(true);
     showToast(cloudStatus);
   }
 
